@@ -64,11 +64,13 @@ func IsOpen(status string) bool {
 	return status == StatusPending || status == StatusProcessing
 }
 
-// canTransitTo 校验状态流转是否合法。
-// 待处理 -> 维修中 / 已关闭, 维修中 -> 已修复 / 已关闭, 已修复 -> 已关闭 / 返修(维修中)。
+// canTransitTo 仅校验跨状态的合法迁移, 状态不变(from == to)一律视为非法。
+// 同状态重复提交必须在写库前被拒绝, 避免重复刷新处置时间或覆盖关闭信息;
+// "维修中再次开工"这类状态不变但确有业务含义的事件, 由 Service 显式承接。
+// 合法迁移: 待处理 -> 维修中 / 已关闭, 维修中 -> 已修复 / 已关闭, 已修复 -> 已关闭 / 返修(维修中)。
 func canTransitTo(from, to string) bool {
 	if from == to {
-		return true
+		return false
 	}
 	switch from {
 	case StatusPending:
@@ -80,6 +82,13 @@ func canTransitTo(from, to string) bool {
 	default:
 		return false
 	}
+}
+
+// canStartRepair 判断当前状态是否允许登记维修开工。
+// 待处理首次开工、维修中再次开工(如待配件完工后的二次维修)均合法,
+// 后者故障状态保持维修中, 仅累加维修次数, 不构成一次状态迁移。
+func canStartRepair(status string) bool {
+	return status == StatusPending || status == StatusProcessing
 }
 
 // Fault 故障登记记录, 串联路灯台账与维修记录。

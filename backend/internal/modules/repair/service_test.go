@@ -207,6 +207,65 @@ func TestRepairRejectedOnClosedFault(t *testing.T) {
 	requireConflict(t, err)
 }
 
+// TestDuplicateCloseDoesNotRewriteRecord 已关闭故障重复提交关闭必须被拒绝,
+// 第一次记下的关闭时间与关闭说明不应被后一次操作覆盖。
+func TestDuplicateCloseDoesNotRewriteRecord(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	device := h.createLamp(t, "LD-T-101")
+	entity := h.createFault(t, device.ID, "误报故障需要作废")
+
+	first, err := h.faults.Close(ctx, entity.ID, fault.CloseRequest{Remark: "首次关闭说明"})
+	require.NoError(t, err)
+	firstClosedAt := first.ClosedAt
+	require.NotNil(t, firstClosedAt)
+
+	// 再次关闭(即使换了说明)应返回冲突, 且不触发任何写库。
+	_, err = h.faults.Close(ctx, entity.ID, fault.CloseRequest{Remark: "第二次关闭说明"})
+	requireConflict(t, err)
+
+	reloaded, err := h.faults.GetByID(ctx, entity.ID)
+	require.NoError(t, err)
+	require.Equal(t, fault.StatusClosed, reloaded.Status)
+	require.NotNil(t, reloaded.ClosedAt)
+	require.True(t, reloaded.ClosedAt.Equal(*firstClosedAt), "关闭时间被重复提交刷新: 原 %v, 现 %v", firstClosedAt, reloaded.ClosedAt)
+	require.Equal(t, "首次关闭说明", reloaded.CloseRemark, "关闭说明被重复提交覆盖")
+}
+
+// TestDuplicateFinishDoesNotRewriteRecord 已完工维修记录重复提交完工必须被拒绝,
+// 第一次记下的完工时间与维修结果不应被覆盖, 故障状态也不应被二次联动。
+func TestDuplicateFinishDoesNotRewriteRecord(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	device := h.createLamp(t, "LD-T-102")
+	entity := h.createFault(t, device.ID, "灯具常亮")
+
+	record, err := h.repairs.Create(ctx, repair.CreateRequest{
+		FaultID: entity.ID, Repairman: "维修工甲",
+	})
+	require.NoError(t, err)
+
+	first, err := h.repairs.Finish(ctx, record.ID, repair.FinishRequest{Result: repair.ResultFixed})
+	require.NoError(t, err)
+	firstFinishedAt := first.FinishedAt
+	require.NotNil(t, firstFinishedAt)
+
+	// 重复完工(换一个结果与时间)应被拒绝。
+	_, err = h.repairs.Finish(ctx, record.ID, repair.FinishRequest{Result: repair.ResultUnfixable})
+	requireConflict(t, err)
+
+	reloaded, err := h.repairs.Get(ctx, record.ID)
+	require.NoError(t, err)
+	require.Equal(t, repair.StatusFinished, reloaded.Status)
+	require.NotNil(t, reloaded.FinishedAt)
+	require.True(t, reloaded.FinishedAt.Equal(*firstFinishedAt), "完工时间被重复提交刷新: 原 %v, 现 %v", firstFinishedAt, reloaded.FinishedAt)
+	require.Equal(t, repair.ResultFixed, reloaded.Result, "维修结果被重复提交覆盖")
+
+	faultReloaded, err := h.faults.GetByID(ctx, entity.ID)
+	require.NoError(t, err)
+	require.Equal(t, fault.StatusRepaired, faultReloaded.Status)
+}
+
 func TestFaultValidation(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)

@@ -245,13 +245,14 @@ func (s *Service) Metadata() *Meta {
 	}
 }
 
-// OnRepairStarted 维修开工: 故障进入维修中, 维修次数累加, 并同步路灯状态。
+// OnRepairStarted 维修开工: 待处理故障转入维修中; 维修中再次开工(如上一轮待配件完工后的
+// 二次维修)状态保持不变。两种情况都累加维修次数并同步路灯状态, 但不产生原地状态迁移。
 func (s *Service) OnRepairStarted(ctx context.Context, faultID uint, repairID uint) error {
 	entity, err := s.repo.GetByID(ctx, faultID)
 	if err != nil {
 		return err
 	}
-	if !canTransitTo(entity.Status, StatusProcessing) {
+	if !canStartRepair(entity.Status) {
 		return apperr.Conflict("故障 %s 当前状态为 %s, 不允许开工维修", entity.FaultNo, StatusLabel(entity.Status))
 	}
 
