@@ -201,13 +201,22 @@ func (s *Service) Close(ctx context.Context, id uint, req CloseRequest) (*Fault,
 	}
 
 	now := time.Now()
-	entity.Status = StatusClosed
-	entity.ClosedAt = &now
-	entity.CloseRemark = strings.TrimSpace(req.Remark)
+	remark := strings.TrimSpace(req.Remark)
 
-	if err := s.repo.Update(ctx, entity); err != nil {
+	// 条件更新保证并发下只有首次关闭生效: 重复提交(含双击/重试/并发)在此被拒绝,
+	// 首次记录的关闭时间与关闭说明不会被改写。
+	closed, err := s.repo.CloseIfOpen(ctx, id, now, remark)
+	if err != nil {
 		return nil, err
 	}
+	if !closed {
+		return nil, apperr.Conflict("故障 %s 已关闭, 无需重复操作", entity.FaultNo)
+	}
+
+	entity.Status = StatusClosed
+	entity.ClosedAt = &now
+	entity.CloseRemark = remark
+
 	if err := s.syncLampStatus(ctx, entity.LampID); err != nil {
 		slog.Warn("同步路灯运行状态失败", "lamp_id", entity.LampID, "fault_no", entity.FaultNo, "error", err)
 	}
@@ -251,7 +260,9 @@ func (s *Service) OnRepairStarted(ctx context.Context, faultID uint, repairID ui
 	if err != nil {
 		return err
 	}
-	if !canTransitTo(entity.Status, StatusProcessing) {
+	// 已处于维修中时允许继续开工(返修/待配件后再次维修), 此时维修次数与最新维修记录仍会变化;
+	// 其余状态必须满足真实的状态流转, 同状态空转一律拒绝。
+	if entity.Status != StatusProcessing && !canTransitTo(entity.Status, StatusProcessing) {
 		return apperr.Conflict("故障 %s 当前状态为 %s, 不允许开工维修", entity.FaultNo, StatusLabel(entity.Status))
 	}
 

@@ -223,8 +223,14 @@ func (s *Service) Finish(ctx context.Context, id uint, req FinishRequest) (*Repa
 		entity.Remark = remark
 	}
 
-	if err := s.repo.Update(ctx, entity); err != nil {
+	// 条件更新保证并发下只有首次完工生效: 重复提交(含双击/重试/并发)在此被拒绝,
+	// 首次记录的完工时间与结果不会被改写。
+	finished, err := s.repo.FinishIfOngoing(ctx, entity)
+	if err != nil {
 		return nil, err
+	}
+	if !finished {
+		return nil, apperr.Conflict("维修记录 %s 已完成, 不允许重复提交", entity.RepairNo)
 	}
 
 	if err := s.faults.OnRepairFinished(ctx, entity.FaultID, result == ResultFixed); err != nil {

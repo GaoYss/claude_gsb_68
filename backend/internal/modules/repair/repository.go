@@ -97,6 +97,27 @@ func (r *Repository) Update(ctx context.Context, entity *Repair) error {
 	return nil
 }
 
+// FinishIfOngoing 原子地完成维修记录, 仅当记录仍处于进行中时才写入完工信息。
+// 返回 false 表示记录已被其它请求先行完成, 调用方应按重复提交拒绝,
+// 首次记录的完工时间与结果不会被再次改写。
+func (r *Repository) FinishIfOngoing(ctx context.Context, entity *Repair) (bool, error) {
+	result := r.session(ctx).Model(&Repair{}).
+		Where("id = ? AND status = ?", entity.ID, StatusOngoing).
+		Updates(map[string]any{
+			"finished_at": entity.FinishedAt,
+			"status":      entity.Status,
+			"result":      entity.Result,
+			"content":     entity.Content,
+			"materials":   entity.Materials,
+			"cost":        entity.Cost,
+			"remark":      entity.Remark,
+		})
+	if result.Error != nil {
+		return false, fmt.Errorf("完成维修记录失败: %w", result.Error)
+	}
+	return result.RowsAffected > 0, nil
+}
+
 // Delete 按主键删除维修记录。
 func (r *Repository) Delete(ctx context.Context, id uint) error {
 	if err := r.session(ctx).Delete(&Repair{}, id).Error; err != nil {

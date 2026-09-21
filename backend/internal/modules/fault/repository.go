@@ -98,6 +98,23 @@ func (r *Repository) Update(ctx context.Context, entity *Fault) error {
 	return nil
 }
 
+// CloseIfOpen 原子地将故障置为已关闭, 仅当当前尚未关闭时才写入。
+// 返回 false 表示故障已被其它请求先行关闭, 调用方应按重复提交拒绝,
+// 首次记录的关闭时间与关闭说明不会被再次改写。
+func (r *Repository) CloseIfOpen(ctx context.Context, id uint, closedAt time.Time, remark string) (bool, error) {
+	result := r.session(ctx).Model(&Fault{}).
+		Where("id = ? AND status <> ?", id, StatusClosed).
+		Updates(map[string]any{
+			"status":       StatusClosed,
+			"closed_at":    closedAt,
+			"close_remark": remark,
+		})
+	if result.Error != nil {
+		return false, fmt.Errorf("关闭故障失败: %w", result.Error)
+	}
+	return result.RowsAffected > 0, nil
+}
+
 // UpdateColumns 局部更新故障字段。
 func (r *Repository) UpdateColumns(ctx context.Context, id uint, columns map[string]any) error {
 	if len(columns) == 0 {

@@ -66,10 +66,9 @@ func IsOpen(status string) bool {
 
 // canTransitTo 校验状态流转是否合法。
 // 待处理 -> 维修中 / 已关闭, 维修中 -> 已修复 / 已关闭, 已修复 -> 已关闭 / 返修(维修中)。
+// 流转必须改变状态: 同状态不算合法流转, 重复提交由服务层按冲突拒绝,
+// 避免空转操作刷新 updated_at 甚至覆盖已记录的处置时间。
 func canTransitTo(from, to string) bool {
-	if from == to {
-		return true
-	}
 	switch from {
 	case StatusPending:
 		return to == StatusProcessing || to == StatusClosed
